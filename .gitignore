@@ -1,0 +1,15 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+.idea/
+appsettings.*.json
+Logs/
+/.vs
+/.vs
+*.DotSettings.user
+.env.*
+.env
+!.env.sample
+*.tar
