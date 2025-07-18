@@ -29,6 +29,16 @@ namespace ThinkEdu_Minio
                     .Enrich.WithProperty("Application", applicationName)
                     .ReadFrom.Configuration(context.Configuration));
 
+            // Add CORS policy
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("AllowAll", policy =>
+                {
+                    policy.AllowAnyOrigin()
+                          .AllowAnyHeader()
+                          .AllowAnyMethod();
+                });
+            });
 
             // cấu hình Swagger
             builder.Services.AddSwaggerGen(options =>
@@ -63,7 +73,7 @@ namespace ThinkEdu_Minio
                 options.MultipartHeadersLengthLimit = int.MaxValue;
             });
 
-            // Cấu hình Kestrel không giới hạn kích thước request
+            // Cấu hình Kestrel không giới hạn kích thước request 
             builder.WebHost.ConfigureKestrel(options =>
             {
                 options.Limits.MaxRequestBodySize = null; // null = không giới hạn
@@ -88,6 +98,8 @@ namespace ThinkEdu_Minio
                     c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.List);
                 });
             }
+
+            app.UseCors("AllowAll");
 
             app.UseHttpsRedirection();
 
