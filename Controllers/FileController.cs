@@ -25,6 +25,18 @@ namespace ThinkEdu_Minio.Controllers
         public async Task<IActionResult> UploadFile(IFormFile fileUpload)
         {
             _logger.LogInformation("Received file upload request.");
+
+            // Check file type - only accept PNG, SVG, JPG
+            if (fileUpload != null)
+            {
+                var extension = Path.GetExtension(fileUpload.FileName).ToLowerInvariant();
+                if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".svg")
+                {
+                    _logger.LogWarning("Invalid file type: {FileType}. Only PNG, SVG, and JPG files are allowed.", extension);
+                    return BadRequest("Only PNG, SVG, and JPG files are allowed.");
+                }
+            }
+
             if (fileUpload is null)
             {
                 _logger.LogInformation("File upload request is null or empty.");
@@ -36,7 +48,6 @@ namespace ThinkEdu_Minio.Controllers
             _logger.LogInformation("File upload completed. Result: {Result}", response);
 
             return Ok(response);
-
         }
 
         [HttpDelete]
@@ -89,7 +100,7 @@ namespace ThinkEdu_Minio.Controllers
             return Ok(response);
         }
 
-        [HttpPost("cancel-upload")]
+        [HttpDelete("{uploadId}/cancel-upload")]
         [SwaggerOperation("Cancel file upload")]
         public async Task<IActionResult> CancelUpload(string uploadId)
         {

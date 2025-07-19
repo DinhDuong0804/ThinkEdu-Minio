@@ -9,26 +9,25 @@ using ThinkEdu_Minio.Services.Interfaces;
 
 namespace ThinkEdu_Minio.Services.Implements
 {
-    public class FileServices : IFileService
+    public partial class FileServices : IFileService
     {
         private readonly IMinioClient _minioClient;
         private readonly MinioSettings _settings;
         private readonly ILogger<FileServices> _logger;
-        private const string TEMP_CHUNKS_DIR = "TempChunks";
 
         public FileServices(IOptions<MinioSettings> options, ILogger<FileServices> logger)
         {
             _settings = options.Value;
             _logger = logger;
-
+           
             _minioClient = new MinioClient()
                 .WithEndpoint(_settings.Endpoint)
                 .WithCredentials(_settings.AccessKey, _settings.SecretKey)
                 .WithSSL(_settings.WithSSL)
                 .Build();
 
-            // Tự động dọn dẹp file tạm cũ khi khởi động
-            Task.Run(() => DonDepThuMucTamCuAsync(TimeSpan.FromDays(1)));
+            // Tự động dọn dẹp file tạm cũ 
+            Task.Run(() => DonDepThuMucTamCuAsync(TimeSpan.FromHours(12)));
         }
 
         // Tạo URL công khai cho file đã upload
@@ -80,13 +79,7 @@ namespace ThinkEdu_Minio.Services.Implements
             {
                 Success = false,
             };
-            if (file == null || file.Length == 0)
-            {
-                response.Message = "File không hợp lệ hoặc rỗng.";
-                _logger.LogInformation("File upload request is null or empty.");
-                return response;
-            }
-
+ 
             try
             {
                 var bucket = _settings.BucketName;
@@ -129,7 +122,7 @@ namespace ThinkEdu_Minio.Services.Implements
                 response.ResultCode = HttpStatusCode.OK;
                 response.Message = "Upload file thành công.";
                 response.Data = url;
-                _logger.LogInformation("Đã upload file lên MinIO: {ObjectKey}, URL: {Url}, ContentType: {ContentType}", 
+                _logger.LogInformation("Đã upload file lên MinIO: {ObjectKey}, URL: {Url}, ContentType: {ContentType}",
                     objectKey, url, file.ContentType);
                 return response;
             }
@@ -183,6 +176,12 @@ namespace ThinkEdu_Minio.Services.Implements
             }
         }
 
+    }
+
+    // Xử lý upload chunk và ghép lại thành file  trên Server rồi upload lên MinIO
+    public partial class FileServices : IFileService
+    {
+        private const string TEMP_CHUNKS_DIR = "TempChunks";
 
         // Lưu từng chunk vào thư mục tạm (TempChunks/<uploadId>/<chunkIndex>.part)
         public async Task<BaseResponse<string>> UploadChunkAsync(IFormFile chunk, string uploadId, int chunkIndex)
@@ -208,7 +207,6 @@ namespace ThinkEdu_Minio.Services.Implements
                 using var stream = new FileStream(chunkPath, FileMode.Create);
                 await chunk.CopyToAsync(stream);
 
-               
                 response.Success = true;
                 response.ResultCode = HttpStatusCode.OK;
                 response.Message = $"Chunk {chunkIndex} uploaded.";
@@ -221,6 +219,8 @@ namespace ThinkEdu_Minio.Services.Implements
             {
                 _logger.LogError(ex, "Lỗi khi upload chunk {ChunkIndex} cho session {UploadId}", chunkIndex, uploadId);
                 response.Message = $"Lỗi khi upload chunk: {ex.Message}";
+
+                await XoaThuMucTamUploadAsync(uploadId);
                 response.ResultCode = HttpStatusCode.InternalServerError;
                 return response;
             }
@@ -256,7 +256,6 @@ namespace ThinkEdu_Minio.Services.Implements
                         await input.CopyToAsync(output);
                     }
                 }
-
                 var bucket = _settings.BucketName;
 
                 // Kiểm tra và tạo bucket nếu chưa tồn tại
@@ -277,26 +276,9 @@ namespace ThinkEdu_Minio.Services.Implements
                     objectKey = $"{nameWithoutExt}_{counter}{extension}";
                 }
 
-                // Xác định content type từ extension trước để đảm bảo có giá trị tốt nhất có thể
+                // Xác định content type từ extension để có thể upload đúng định dạng
                 string contentType = GetMimeTypeFromFileName(fileName);
                 _logger.LogInformation("Content type từ extension: {ContentType}", contentType);
-                
-                //// Sau đó kiểm tra nếu có content-type từ file (chỉ sử dụng nếu không phải là octet-stream)
-                //var contentTypePath = Path.Combine(tempPath, "content-type.txt");
-                //if (File.Exists(contentTypePath))
-                //{
-                //    var storedContentType = File.ReadAllText(contentTypePath).Trim();
-                //    if (!string.IsNullOrEmpty(storedContentType) && 
-                //        storedContentType != "application/octet-stream")
-                //    {
-                //        contentType = storedContentType;
-                //        _logger.LogInformation("Đã ghi đè content type từ file: {ContentType}", contentType);
-                //    }
-                //    else
-                //    {
-                //        _logger.LogInformation("Bỏ qua content type từ file vì là loại generic: {StoredType}", storedContentType);
-                //    }
-                //}
 
                 // Upload lên MinIO, đảm bảo stream được dispose trước khi xóa folder
                 await using (var finalStream = new FileStream(finalPath, FileMode.Open))
@@ -319,13 +301,14 @@ namespace ThinkEdu_Minio.Services.Implements
                 response.Message = "Upload completed";
                 response.Data = url;
 
-                _logger.LogInformation("Ghép và upload file từ session {UploadId} thành công. URL: {Url}, ContentType: {ContentType}", 
+                _logger.LogInformation("Ghép và upload file từ session {UploadId} thành công. URL: {Url}, ContentType: {ContentType}",
                     uploadId, url, contentType);
                 return response;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Lỗi khi hoàn tất upload cho session {UploadId}", uploadId);
+                await XoaThuMucTamUploadAsync(uploadId);
                 response.Message = $"Lỗi khi hoàn tất upload: {ex.Message}";
                 response.ResultCode = HttpStatusCode.InternalServerError;
                 return response;
@@ -377,7 +360,7 @@ namespace ThinkEdu_Minio.Services.Implements
                     if (Directory.Exists(tempPath))
                     {
                         // Xóa thư mục và tất cả các file bên trong
-                        Directory.Delete(tempPath, true);
+                         Directory.Delete(tempPath, true);
                         _logger.LogInformation("Đã xóa thư mục tạm: {TempPath}", tempPath);
                     }
                 }
@@ -461,6 +444,4 @@ namespace ThinkEdu_Minio.Services.Implements
             };
         }
     }
-
-    public partial class FileService
 }
